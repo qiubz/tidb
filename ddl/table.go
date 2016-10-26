@@ -56,7 +56,7 @@ func (d *ddl) onCreateTable(t *meta.Meta, job *model.Job) error {
 		}
 	}
 
-	_, err = t.GenSchemaVersion()
+	ver, err := updateSchemaVersion(t, job)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -72,6 +72,7 @@ func (d *ddl) onCreateTable(t *meta.Meta, job *model.Job) error {
 		}
 		// finish this job
 		job.State = model.JobDone
+		addTableHistoryInfo(job, ver, tbInfo)
 		return nil
 	default:
 		return ErrInvalidTableState.Gen("invalid table state %v", tbInfo.State)
@@ -95,7 +96,7 @@ func (d *ddl) onDropTable(t *meta.Meta, job *model.Job) error {
 		return errors.Trace(infoschema.ErrTableNotExists)
 	}
 
-	_, err = t.GenSchemaVersion()
+	ver, err := updateSchemaVersion(t, job)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -117,11 +118,13 @@ func (d *ddl) onDropTable(t *meta.Meta, job *model.Job) error {
 		if err = t.DropTable(job.SchemaID, job.TableID); err != nil {
 			break
 		}
+
 		// finish this job
-		prefix := tablecodec.EncodeTablePrefix(tableID)
-		job.Args = []interface{}{prefix}
 		job.State = model.JobDone
 		job.SchemaState = model.StateNone
+		addTableHistoryInfo(job, ver, tblInfo)
+		prefix := tablecodec.EncodeTablePrefix(tableID)
+		job.Args = append(job.Args, prefix)
 	default:
 		err = ErrInvalidTableState.Gen("invalid table state %v", tblInfo.State)
 	}
@@ -219,12 +222,13 @@ func (d *ddl) onTruncateTable(t *meta.Meta, job *model.Job) error {
 		return errors.Trace(err)
 	}
 
-	_, err = t.GenSchemaVersion()
+	ver, err := updateSchemaVersion(t, job)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	prefix := tablecodec.EncodeTablePrefix(tableID)
-	job.Args = []interface{}{prefix}
 	job.State = model.JobDone
+	addTableHistoryInfo(job, ver, tblInfo)
+	prefix := tablecodec.EncodeTablePrefix(tableID)
+	job.Args = append(job.Args, prefix)
 	return nil
 }

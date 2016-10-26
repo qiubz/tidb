@@ -153,9 +153,38 @@ func asyncNotify(ch chan struct{}) {
 	}
 }
 
-// Background job is serial processing, so we can extend the owner timeout to make sure
-// a batch of rows will be processed before timeout.
-var minBgOwnerTimeout = 20 * time.Second
+const maxOwnerTimeout = int64(20 * time.Minute)
+
+// We define minBgOwnerTimeout and minDDLOwnerTimeout as variable,
+// because we need to change them in test.
+var (
+	minBgOwnerTimeout  = int64(20 * time.Second)
+	minDDLOwnerTimeout = int64(4 * time.Second)
+)
+
+func (d *ddl) getCheckOwnerTimeout(flag JobType) int64 {
+	// we must wait 2 * lease time to guarantee other servers update the schema,
+	// the owner will update its owner status every 2 * lease time, so here we use
+	// 4 * lease to check its timeout.
+	timeout := int64(4 * d.lease)
+	if timeout > maxOwnerTimeout {
+		return maxOwnerTimeout
+	}
+
+	// The value of lease may be less than 1 second, so the operation of
+	// checking owner is frequent and it isn't necessary.
+	// So if timeout is less than 4 second, we will use default minDDLOwnerTimeout.
+	if flag == ddlJobFlag && timeout < minDDLOwnerTimeout {
+		return minDDLOwnerTimeout
+	}
+	if flag == bgJobFlag && timeout < minBgOwnerTimeout {
+		// Background job is serial processing, so we can extend the owner timeout to make sure
+		// a batch of rows will be processed before timeout.
+		// If timeout is less than maxBgOwnerTimeout, we will use default minBgOwnerTimeout.
+		return minBgOwnerTimeout
+	}
+	return timeout
+}
 
 func (d *ddl) checkOwner(t *meta.Meta, flag JobType) (*model.Owner, error) {
 	owner, err := d.getJobOwner(t, flag)
@@ -169,16 +198,7 @@ func (d *ddl) checkOwner(t *meta.Meta, flag JobType) (*model.Owner, error) {
 	}
 
 	now := time.Now().UnixNano()
-	// we must wait 2 * lease time to guarantee other servers update the schema,
-	// the owner will update its owner status every 2 * lease time, so here we use
-	// 4 * lease to check its timeout.
-	maxTimeout := int64(4 * d.lease)
-	if flag == bgJobFlag {
-		// If 4 * lease is less then minBgOwnerTimeout, we will use default minBgOwnerTimeout.
-		if maxTimeout < int64(minBgOwnerTimeout) {
-			maxTimeout = int64(minBgOwnerTimeout)
-		}
-	}
+	maxTimeout := d.getCheckOwnerTimeout(flag)
 	sub := now - owner.LastUpdateTS
 	if owner.OwnerID == d.uuid || sub > maxTimeout {
 		owner.OwnerID = d.uuid
@@ -426,7 +446,9 @@ func (d *ddl) runDDLJob(t *meta.Meta, job *model.Job) {
 		return
 	}
 
-	job.State = model.JobRunning
+	if job.State != model.JobRollback {
+		job.State = model.JobRunning
+	}
 
 	var err error
 	switch job.Type {
@@ -492,4 +514,29 @@ func (d *ddl) waitSchemaChanged(waitTime time.Duration) {
 	case <-time.After(waitTime):
 	case <-d.quitCh:
 	}
+}
+
+// updateSchemaVersion increments the schema version by 1 and sets SchemaDiff.
+func updateSchemaVersion(t *meta.Meta, job *model.Job) (int64, error) {
+	schemaVersion, err := t.GenSchemaVersion()
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	diff := &model.SchemaDiff{
+		Version:  schemaVersion,
+		Type:     job.Type,
+		SchemaID: job.SchemaID,
+	}
+	if job.Type == model.ActionTruncateTable {
+		// Truncate table has two table ID, should be handled differently.
+		err = job.DecodeArgs(&diff.TableID)
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		diff.OldTableID = job.TableID
+	} else {
+		diff.TableID = job.TableID
+	}
+	err = t.SetSchemaDiff(schemaVersion, diff)
+	return schemaVersion, errors.Trace(err)
 }

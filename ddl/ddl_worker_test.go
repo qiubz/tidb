@@ -33,6 +33,11 @@ import (
 
 var _ = Suite(&testDDLSuite{})
 
+type testDDLSuite struct {
+	originMinBgOwnerTimeout  int64
+	originMinDDLOwnerTimeout int64
+}
+
 const testLease = 5 * time.Millisecond
 
 func testCreateStore(c *C, name string) kv.Storage {
@@ -40,9 +45,6 @@ func testCreateStore(c *C, name string) kv.Storage {
 	store, err := driver.Open(fmt.Sprintf("memory://%s", name))
 	c.Assert(err, IsNil)
 	return store
-}
-
-type testDDLSuite struct {
 }
 
 func testCheckOwner(c *C, d *ddl, isOwner bool, flag JobType) {
@@ -59,12 +61,23 @@ func testCheckOwner(c *C, d *ddl, isOwner bool, flag JobType) {
 	c.Assert(terror.ErrorEqual(err, errNotOwner), IsTrue)
 }
 
+func (s *testDDLSuite) SetUpSuite(c *C) {
+	s.originMinDDLOwnerTimeout = minDDLOwnerTimeout
+	s.originMinBgOwnerTimeout = minBgOwnerTimeout
+	minDDLOwnerTimeout = int64(4 * testLease)
+	minBgOwnerTimeout = int64(4 * testLease)
+}
+
+func (s *testDDLSuite) TearDownSuite(c *C) {
+	minDDLOwnerTimeout = s.originMinDDLOwnerTimeout
+	minBgOwnerTimeout = s.originMinBgOwnerTimeout
+}
+
 func (s *testDDLSuite) TestCheckOwner(c *C) {
 	defer testleak.AfterTest(c)()
 	store := testCreateStore(c, "test_owner")
 	defer store.Close()
 
-	minBgOwnerTimeout = testLease
 	d1 := newDDL(store, nil, nil, testLease)
 	defer d1.close()
 
@@ -80,6 +93,7 @@ func (s *testDDLSuite) TestCheckOwner(c *C) {
 	testCheckOwner(c, d2, false, bgJobFlag)
 	d1.close()
 
+	// Make sure owner is changed.
 	time.Sleep(6 * testLease)
 
 	testCheckOwner(c, d2, true, ddlJobFlag)
@@ -102,7 +116,6 @@ func (s *testDDLSuite) TestCheckOwner(c *C) {
 	d2.SetLease(1 * time.Second)
 	d2.SetLease(2 * time.Second)
 	c.Assert(d2.GetLease(), Equals, 2*time.Second)
-	minBgOwnerTimeout = 20 * time.Second
 }
 
 func (s *testDDLSuite) TestSchemaError(c *C) {

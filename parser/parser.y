@@ -165,6 +165,7 @@ import (
 	hash		"HASH"
 	identified	"IDENTIFIED"
 	isolation	"ISOLATION"
+	indexes		"INDEXES"
 	keyBlockSize	"KEY_BLOCK_SIZE"
 	local		"LOCAL"
 	level		"LEVEL"
@@ -467,6 +468,7 @@ import (
 	DropDatabaseStmt	"DROP DATABASE statement"
 	DropIndexStmt		"DROP INDEX statement"
 	DropTableStmt		"DROP TABLE statement"
+	DropUserStmt		"DROP USER"
 	EmptyStmt		"empty statement"
 	Enclosed		"Enclosed by"
 	EqOpt			"= or empty"
@@ -490,6 +492,7 @@ import (
 	FieldList		"field expression list"
 	FieldsOrColumns 	"Fields or columns"
 	FlushStmt		"Flush statement"
+	FromOrIn		"From or In"
 	TableRefsClause		"Table references clause"
 	Function		"function expr"
 	FunctionCallAgg		"Function call on aggregate data"
@@ -591,6 +594,7 @@ import (
 	ShowDatabaseNameOpt	"Show tables/columns statement database name option"
 	ShowTableAliasOpt       "Show table alias option"
 	ShowLikeOrWhereOpt	"Show like or where clause option"
+	ShowIndexKwd		"Show index/indexs/key keyword"
 	SignedLiteral		"Literal or NumLiteral with sign"
 	Starting		"Starting by"
 	Statement		"statement"
@@ -629,6 +633,7 @@ import (
 	UnlockTablesStmt	"Unlock tables statement"
 	UpdateStmt		"UPDATE statement"
 	Username		"Username"
+	UsernameList		"UsernameList"
 	UserSpec		"Username and auth option"
 	UserSpecList		"Username and auth option list"
 	UserVariable		"User defined variable name"
@@ -1508,6 +1513,16 @@ DropTableStmt:
 		$$ = &ast.DropTableStmt{IfExists: true, Tables: $5.([]*ast.TableName)}
 	}
 
+DropUserStmt:
+    "DROP" "USER" UsernameList
+    {
+        $$ = &ast.DropUserStmt{IfExists: false, UserList: $3.([]string)}
+    }
+|   "DROP" "USER" "IF" "EXISTS" UsernameList
+    {
+        $$ = &ast.DropUserStmt{IfExists: true, UserList: $5.([]string)}
+    }
+
 TableOrTables:
 	"TABLE"
 |	"TABLES"
@@ -1967,7 +1982,7 @@ UnReservedKeyword:
 |	"TRUNCATE" | "UNKNOWN" | "VALUE" | "WARNINGS" | "YEAR" | "MODE"  | "WEEK"  | "ANY" | "SOME" | "USER" | "IDENTIFIED"
 |	"COLLATION" | "COMMENT" | "AVG_ROW_LENGTH" | "CONNECTION" | "CHECKSUM" | "COMPRESSION" | "KEY_BLOCK_SIZE" | "MAX_ROWS"
 |	"MIN_ROWS" | "NATIONAL" | "ROW" | "ROW_FORMAT" | "QUARTER" | "GRANTS" | "TRIGGERS" | "DELAY_KEY_WRITE" | "ISOLATION"
-|	"REPEATABLE" | "COMMITTED" | "UNCOMMITTED" | "ONLY" | "SERIALIZABLE" | "LEVEL" | "VARIABLES" | "SQL_CACHE"
+|	"REPEATABLE" | "COMMITTED" | "UNCOMMITTED" | "ONLY" | "SERIALIZABLE" | "LEVEL" | "VARIABLES" | "SQL_CACHE" | "INDEXES"
 |	"SQL_NO_CACHE" | "DISABLE"  | "ENABLE" | "REVERSE" | "SPACE" | "PRIVILEGES" | "NO" | "BINLOG" | "FUNCTION"
 
 NotKeywordToken:
@@ -3896,6 +3911,16 @@ Username:
 		$$ = $1 + "@" + $3
 	}
 
+UsernameList:
+    Username
+    {
+        $$ = []string{$1.(string)}
+    }
+|   UsernameList ',' Username
+    {
+        $$ = append($1.([]string), $3.(string))
+    }
+
 PasswordOpt:
 	stringLit
 	{
@@ -3960,20 +3985,21 @@ ShowStmt:
 			User:	$4.(string),
 		}
 	}
-|	"SHOW" "INDEX" "FROM" TableName
+|	"SHOW" ShowIndexKwd FromOrIn TableName
 	{
 		$$ = &ast.ShowStmt{
 			Tp: ast.ShowIndex,
 			Table: $4.(*ast.TableName),
 		}
 	}
-|	"SHOW" "KEYS" "FROM" TableName
-	{
-		$$ = &ast.ShowStmt{
-			Tp: ast.ShowIndex,
-			Table: $4.(*ast.TableName),
-		}
-	}
+
+ShowIndexKwd:
+	"INDEX"
+|	"INDEXES" {}
+|	"KEYS"
+
+FromOrIn:
+	"FROM"|"IN"
 
 ShowTargetFilterable:
 	"ENGINES"
@@ -4196,6 +4222,7 @@ Statement:
 |	DropDatabaseStmt
 |	DropIndexStmt
 |	DropTableStmt
+|	DropUserStmt
 |	FlushStmt
 |	GrantStmt
 |	InsertIntoStmt
